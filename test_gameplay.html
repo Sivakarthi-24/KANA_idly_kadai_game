@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>KANA Full Gameplay Integration Test</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body style="background:#000;">
+  <div id="game-wrapper">
+    <div id="game-screen-container">
+      <canvas id="game-canvas" width="920" height="580"></canvas>
+      <div id="ui-overlay"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { GameScene } from './src/game/GameScene.js';
+    import { HUD } from './src/ui/HUD.js';
+    import { MainMenu } from './src/ui/MainMenu.js';
+    import { PauseMenu } from './src/ui/PauseMenu.js';
+    import { SettingsMenu } from './src/ui/SettingsMenu.js';
+    import { EndOfDayScreen } from './src/ui/EndOfDayScreen.js';
+    import { UpgradesShopUI } from './src/ui/UpgradesShopUI.js';
+    import { TouchControls } from './src/ui/TouchControls.js';
+    import { saveManager } from './src/game/SaveManager.js';
+
+    const testResults = [];
+    function check(cond, name) {
+      if (!cond) {
+        testResults.push({ pass: false, name });
+        throw new Error(name);
+      }
+      testResults.push({ pass: true, name });
+    }
+
+    async function runLiveGameplayTest() {
+      try {
+        const canvas = document.getElementById('game-canvas');
+        const uiContainer = document.getElementById('ui-overlay');
+        check(canvas && uiContainer, 'Canvas and UI overlay found');
+
+        let hudData = null;
+        const scene = new GameScene(canvas, {
+          onHUDUpdate: (data) => { hudData = data; },
+          onDayComplete: () => {}
+        });
+
+        const hud = new HUD(uiContainer, () => scene.pause());
+        const mainMenu = new MainMenu(uiContainer, {
+          onStartGame: (day) => {
+            mainMenu.hide();
+            hud.show();
+            scene.startDay(day);
+          }
+        });
+        const pauseMenu = new PauseMenu(uiContainer, {});
+        const settingsMenu = new SettingsMenu(uiContainer, {});
+        const shopUI = new UpgradesShopUI(uiContainer, {});
+        const endOfDay = new EndOfDayScreen(uiContainer, {});
+        const touch = new TouchControls(uiContainer, () => scene.player.interact());
+
+        // 1. Initial State: Main menu visible
+        mainMenu.show();
+        check(document.getElementById('main-menu').style.display === 'flex', 'Main menu visible initially');
+
+        // 2. Start Game Shift
+        mainMenu.hide();
+        hud.show();
+        scene.startDay(1);
+        check(scene.isRunning === true, 'Scene is running');
+        check(document.getElementById('game-hud').style.display === 'block', 'HUD visible after start');
+
+        // 3. Move Player
+        const startX = scene.player.x;
+        const startY = scene.player.y;
+        scene.player.setKey('KeyA', true);
+        scene.player.update(0.2);
+        scene.player.setKey('KeyA', false);
+        check(scene.player.x < startX, 'Chef moved left on KeyA');
+
+        // 4. Move Chef near Idli Station and cook
+        const idliStation = scene.map.stations.IDLI_STATION;
+        scene.player.x = idliStation.x;
+        scene.player.y = idliStation.y + 35;
+        scene.player.update(0.05);
+        check(scene.player.nearbyStation !== null, 'Chef detected nearby Idli station');
+
+        // Interact to start cooking
+        const interactCook = scene.player.interact();
+        check(interactCook.action === 'STARTED_COOKING', 'Chef started cooking idlis');
+        check(scene.cooking.stations.IDLI_STATION.state === 'COOKING', 'Idli station state is COOKING');
+
+        // Fast-forward cooking
+        scene.cooking.stations.IDLI_STATION.elapsed = 4.2;
+        scene.cooking.update(0.05);
+        check(scene.cooking.stations.IDLI_STATION.state === 'READY', 'Idli station ready');
+
+        // Collect cooked dish
+        const collect = scene.player.interact();
+        check(collect.action === 'COLLECTED_DISH', 'Chef collected idly');
+        check(scene.player.heldDish !== null, 'Chef is holding idly dish');
+        check(scene.player.heldDish.dishId === 'IDLY', 'Held dish is IDLY');
+
+        // Walk to Serving Counter and deposit
+        const counter = scene.map.stations.SERVING_COUNTER;
+        scene.player.x = counter.x;
+        scene.player.y = counter.y - 30; // on kitchen side of serving counter
+        scene.player.update(0.05);
+        check(scene.player.nearbyStation.id === 'SERVING_COUNTER', 'Chef near Serving Counter');
+
+        const deposit = scene.player.interact();
+        check(deposit.action === 'PLACED_ON_COUNTER', 'Chef placed dish onto Serving Counter');
+        check(scene.player.heldDish === null, 'Chef hands are empty after serving');
+        check(scene.cooking.servingCounter.length === 1, 'Serving counter has 1 dish');
+
+        // 5. Pause & Resume Test
+        scene.pause();
+        check(scene.isPaused === true, 'Game paused');
+        scene.resume();
+        check(scene.isPaused === false, 'Game resumed');
+
+        // 6. Upgrades Shop UI Test
+        shopUI.show();
+        check(document.getElementById('upgrades-shop').style.display === 'flex', 'Upgrades shop opened');
+        shopUI.hide();
+        check(document.getElementById('upgrades-shop').style.display === 'none', 'Upgrades shop closed');
+
+        // 7. Closing time stops new arrivals while the shift wraps up
+        scene.customers.reset();
+        scene.customers.spawnTimer = scene.customers.nextSpawnInterval;
+        scene.dayTimer = 0.01;
+        scene.update(0.02);
+        check(scene.customers.customers.length === 0, 'No customers spawn after closing time');
+
+        // Stop scene
+        scene.stop();
+
+        fetch('/test-done', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ success: true, passed: testResults.length, total: testResults.length })
+        });
+      } catch (err) {
+        fetch('/test-done', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ success: false, error: err.message })
+        });
+      }
+    }
+
+    runLiveGameplayTest();
+  </script>
+</body>
+</html>

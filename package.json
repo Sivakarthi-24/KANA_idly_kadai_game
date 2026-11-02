@@ -1,0 +1,21 @@
+{
+  "name": "kana-tamil-nadu-idly-kadai",
+  "version": "1.0.0",
+  "description": "KANA: Tamil Nadu Idly Kadai - Playable South Indian Cooking & Restaurant Simulation Game",
+  "scripts": {
+    "dev": "py -m http.server 8000",
+    "start": "py -m http.server 8000",
+    "test": "py run_test.py",
+    "build": "echo 'Static build ready - zero build step required for deployment!'"
+  },
+  "keywords": [
+    "html5-game",
+    "cooking-game",
+    "south-indian",
+    "idli-kadai",
+    "restaurant-simulation",
+    "tamil-nadu"
+  ],
+  "author": "KANA Games",
+  "license": "MIT"
+}

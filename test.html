@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>KANA Game Automated Test Suite</title>
+</head>
+<body>
+  <h1>KANA Game Automated Test Suite</h1>
+  <div id="test-results">Running tests...</div>
+
+  <script type="module">
+    import { DISHES, STATIONS, TABLES, UPGRADES, DAYS, CUSTOMER_ARCHETYPES } from './src/game/GameConfig.js';
+    import { RestaurantMap } from './src/game/RestaurantMap.js';
+    import { CookingManager } from './src/game/CookingManager.js';
+    import { OrderManager } from './src/game/OrderManager.js';
+    import { CustomerManager } from './src/game/CustomerManager.js';
+    import { WaiterAI } from './src/game/WaiterAI.js';
+    import { EconomyManager } from './src/game/EconomyManager.js';
+    import { UpgradeManager } from './src/game/UpgradeManager.js';
+    import { SaveManager, saveManager } from './src/game/SaveManager.js';
+    import { ParticleSystem } from './src/game/ParticleSystem.js';
+
+    const results = [];
+    function assert(condition, message) {
+      if (!condition) {
+        results.push({ pass: false, message: `FAIL: ${message}` });
+        console.error(`FAIL: ${message}`);
+        throw new Error(message);
+      } else {
+        results.push({ pass: true, message: `PASS: ${message}` });
+        console.log(`PASS: ${message}`);
+      }
+    }
+
+    try {
+      // 1. Menu & Exact Prices Test
+      assert(DISHES.IDLY.price === 10, 'Idly price is ₹10');
+      assert(DISHES.DOSA.price === 20, 'Dosa price is ₹20');
+      assert(DISHES.POORI.price === 20, 'Poori price is ₹20');
+      assert(DISHES.PONGAL.price === 15, 'Pongal price is ₹15');
+      assert(DISHES.CHAPATI.price === 15, 'Chapati price is ₹15');
+      assert(DISHES.EGG_DOSA.price === 25, 'Egg Dosa price is ₹25');
+      assert(Object.keys(DISHES).length === 6, 'Exactly 6 authentic South Indian dishes');
+
+      // 2. Restaurant Map & Collisions Test
+      const map = new RestaurantMap();
+      assert(map.checkCollision(10, 10), 'Collision with outer wall detected');
+      assert(map.checkCollision(270, 100), 'Collision with cooking counter detected');
+      assert(!map.checkCollision(420, 175), 'Chef starting spot in corridor is walkable');
+
+      // 3. Economy Manager Test
+      const economy = new EconomyManager();
+      const mockOrder = { id: 201, price: 20, dishName: 'Dosa', status: 'ORDERED' };
+      const payout = economy.processCompletedOrder(mockOrder, 'PERFECT', 0.85);
+      assert(payout !== null, 'Order processed successfully');
+      assert(payout.basePrice === 20, 'Base price ₹20 credited');
+      assert(payout.qualityBonus === 5, 'Perfect quality bonus +₹5 credited');
+      assert(payout.speedBonus === 3, 'Speed bonus +₹3 credited');
+      assert(payout.tip > 0, 'Customer tip credited');
+      assert(payout.totalEarned === 20 + 5 + 3 + payout.tip, 'Total earned formula verified');
+
+      // Prevent duplicate payments test
+      const duplicatePayout = economy.processCompletedOrder(mockOrder, 'PERFECT', 0.85);
+      assert(duplicatePayout === null, 'Duplicate payment prevented for same order ID');
+
+      // Cancelled order payment prevention
+      const cancelledOrder = { id: 202, price: 25, dishName: 'Egg Dosa', status: 'CANCELLED' };
+      const cancelledPayout = economy.processCompletedOrder(cancelledOrder, 'PERFECT', 0.85);
+      assert(cancelledPayout === null, 'Payment prevented for cancelled order');
+
+      // 4. Cooking Manager Test
+      const particles = new ParticleSystem();
+      const cooking = new CookingManager(particles);
+
+      // Start cooking idly
+      const startCook = cooking.interactStation('IDLI_STATION', null);
+      assert(startCook.action === 'STARTED_COOKING', 'Idli station started cooking');
+      assert(cooking.stations.IDLI_STATION.state === 'COOKING', 'Idli state is COOKING');
+
+      // Simulate cook time completion
+      cooking.stations.IDLI_STATION.elapsed = 4.2;
+      cooking.update(0.1);
+      assert(cooking.stations.IDLI_STATION.state === 'READY', 'Idli state transitioned to READY');
+      assert(cooking.stations.IDLI_STATION.quality === 'PERFECT', 'Idli cooked to PERFECT quality');
+
+      // Collect idly
+      const collectDish = cooking.interactStation('IDLI_STATION', null);
+      assert(collectDish.action === 'COLLECTED_DISH', 'Chef successfully collected prepared idly');
+      assert(collectDish.remainingItem.dishId === 'IDLY', 'Collected item is IDLY');
+      assert(collectDish.remainingItem.quality === 'PERFECT', 'Collected item retained PERFECT quality');
+
+      // Place on Serving Counter
+      const placeCounter = cooking.interactStation('SERVING_COUNTER', collectDish.remainingItem);
+      assert(placeCounter.action === 'PLACED_ON_COUNTER', 'Dish placed onto Serving Counter');
+      assert(cooking.servingCounter.length === 1, 'Serving Counter has 1 dish waiting');
+      assert(cooking.isDishReadyOnCounter('IDLY'), 'Serving counter confirms IDLY is ready for pickup');
+
+      // 5. Order & Customer System Test
+      const orders = new OrderManager(economy);
+      const customers = new CustomerManager(map, orders, economy, particles);
+      customers.trySpawnCustomer(DAYS[0]);
+      assert(customers.customers.length === 1, 'Customer successfully spawned');
+      const cust = customers.customers[0];
+      assert(cust.table !== null, 'Customer assigned to a table');
+
+      // 6. Waiter AI Workflow Test
+      const waiter = new WaiterAI(map, customers, orders, cooking, particles);
+      cust.state = 'WAITING_FOR_ORDER';
+      waiter.update(0.1);
+      assert(waiter.state === 'APPROACH_CUSTOMER_ORDER', 'Waiter detected customer and began approach');
+
+      // Waiter takes order
+      waiter.x = cust.x + 24;
+      waiter.y = cust.y;
+      waiter.state = 'TAKE_ORDER';
+      waiter.stateTimer = 0.01;
+      waiter.currentCustomer = cust;
+      waiter.update(0.05);
+      assert(cust.order !== null, 'Customer order ticket created');
+      assert(waiter.carryingTicket === true, 'Waiter carrying order ticket to kitchen');
+
+      // Waiter picks up ready food and serves
+      cust.state = 'WAITING_FOR_FOOD';
+      cust.chosenDishId = 'IDLY';
+      waiter.state = 'IDLE';
+      waiter.update(0.1);
+      assert(waiter.state === 'APPROACH_SERVING_COUNTER', 'Waiter detected matching IDLY on serving counter');
+
+      // 7. Upgrades System Test
+      const upgradeMgr = new UpgradeManager();
+      const idliInfo = upgradeMgr.getUpgradeInfo('FASTER_IDLI');
+      assert(idliInfo !== null, 'Upgrade info retrieved');
+      assert(idliInfo.cost === 120, 'Initial Turbo Idli Steamer upgrade cost is ₹120');
+
+      // 8. Save System Test
+      saveManager.set('cashBalance', 500);
+      assert(saveManager.get('cashBalance') === 500, 'SaveManager correctly set and read cash balance');
+      saveManager.resetProgress();
+      assert(saveManager.get('cashBalance') === 0, 'SaveManager reset works cleanly');
+
+      const passedCount = results.filter(r => r.pass).length;
+      document.getElementById('test-results').innerHTML = `
+        <h2 style="color: green;">ALL ${passedCount} TESTS PASSED SUCCESSFULLY!</h2>
+        <ul>${results.map(r => `<li>${r.message}</li>`).join('')}</ul>
+      `;
+      document.title = `TESTS_COMPLETED_${passedCount}_PASSED`;
+
+      fetch('/test-done', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ success: true, passed: passedCount, total: results.length })
+      });
+    } catch (e) {
+      document.getElementById('test-results').innerHTML = `
+        <h2 style="color: red;">TEST FAILED: ${e.message}</h2>
+      `;
+      document.title = `TEST_ERROR_${e.message}`;
+
+      fetch('/test-done', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ success: false, error: e.message })
+      });
+    }
+  </script>
+</body>
+</html>
